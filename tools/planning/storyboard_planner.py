@@ -260,7 +260,7 @@ RULES:
             )
             response = client.messages.create(
                 model=model,
-                max_tokens=4000,
+                max_tokens=8000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             )
