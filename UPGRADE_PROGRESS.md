@@ -162,3 +162,6 @@ pip install -r requirements-gpu.txt
 | 2026-06-30 | 修复 StoryboardPlanner：Claude 模型须用 Anthropic SDK，非 OpenAI SDK |
 | 2026-06-30 | Phase 3 骨架完成：InstantID face-lock（待 GPU 环境激活） |
 | 2026-06-30 | 用新分镜方案重新提交视频生成任务（brwpzzqeh，进行中） |
+| 2026-07-03 | 制作案例二：《The Noodle Stall / 面摊有只猫》，2分钟吉卜力风格动画，24镜头 |
+| 2026-07-03 | 上传两个案例视频到 GitHub Releases，搭建 GitHub Pages 演示站点（完整可播放） |
+| 2026-07-03 | **重大 Bug 修复**：`leihuo_video.py` 的 `duration`/`resolution`/`aspect_ratio` 一直被静默忽略——根因是火山引擎 Doubao Seedance API 要求这些参数以内嵌指令形式写入 prompt 文本（`--dur N --rs WxH --rt W:H`），而非 JSON 字段。修复后端到端验证：请求15秒 → 实际输出15.09秒，请求720p → 实际输出1280×720，完全匹配。此前《面摊有只猫》的24个镜头全部固定5秒正是此 bug 导致 |
