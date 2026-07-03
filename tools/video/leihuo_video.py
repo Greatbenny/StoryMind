@@ -1,9 +1,21 @@
 """NetEase Leihuo Gateway video generation — Doubao Seedance 2.0.
 
-Uses the OpenAI-compatible /v1/videos/generations task-based endpoint pattern
-that most Chinese AI gateways expose for video models.
+Endpoint: POST /v1/video/generations (singular "video"), polled via
+GET /v1/video/generations/{task_id}.
 
-If the gateway returns a different format, adjust _submit and _poll accordingly.
+IMPORTANT quirk (confirmed empirically 2026-07-03): the underlying Volcengine
+Doubao Seedance model does NOT read duration/resolution/aspect_ratio from
+top-level JSON fields — it silently ignores them and falls back to defaults
+(5s / 720p / 16:9). These parameters must instead be appended as inline,
+Midjourney-style flags on the prompt text itself:
+
+    "<prompt text> --dur 10 --rs 720p --rt 16:9"
+
+This matches Volcengine Ark's documented content-generation task convention.
+Do not move duration/resolution/aspect_ratio back to top-level JSON fields
+without re-verifying against a real generation (JSON acceptance returns 200
+even when the parameter is ignored, so HTTP status alone does not prove it
+worked — always check the actual output file's duration).
 """
 
 from __future__ import annotations
@@ -82,9 +94,13 @@ class LeihuoVideo(BaseTool):
             },
             "duration": {
                 "type": "string",
-                "enum": ["4", "5", "6", "7", "8", "10"],
+                "enum": ["4", "5", "6", "7", "8", "10", "12", "15"],
                 "default": "5",
-                "description": "Duration in seconds",
+                "description": (
+                    "Duration in seconds. Passed to the underlying Volcengine "
+                    "Doubao Seedance model as an inline '--dur N' prompt flag "
+                    "(the model ignores duration as a plain JSON field)."
+                ),
             },
             "aspect_ratio": {
                 "type": "string",
@@ -153,12 +169,22 @@ class LeihuoVideo(BaseTool):
         model = inputs.get("model", _DEFAULT_MODEL)
         operation = inputs.get("operation", "text_to_video")
 
+        # IMPORTANT: the underlying Volcengine Doubao Seedance API ignores
+        # duration/resolution/aspect_ratio as top-level JSON fields — it only
+        # honors them as inline flags appended to the prompt text, Midjourney
+        # style (e.g. "... --dur 10 --rs 720p --rt 16:9"). Confirmed empirically:
+        # sending these as JSON fields silently falls back to 5s/720p/16:9
+        # regardless of the requested value.
+        duration = str(inputs.get("duration", "5"))
+        resolution = inputs.get("resolution", "720p")
+        aspect_ratio = inputs.get("aspect_ratio", "16:9")
+
+        prompt = inputs["prompt"].rstrip()
+        prompt = f"{prompt} --dur {duration} --rs {resolution} --rt {aspect_ratio}"
+
         payload: dict[str, Any] = {
             "model": model,
-            "prompt": inputs["prompt"],
-            "duration": inputs.get("duration", "5"),
-            "aspect_ratio": inputs.get("aspect_ratio", "16:9"),
-            "resolution": inputs.get("resolution", "720p"),
+            "prompt": prompt,
             "generate_audio": inputs.get("generate_audio", True),
         }
         if inputs.get("seed") is not None:
