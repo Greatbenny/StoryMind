@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &nbsp;·&nbsp;
+  <a href="https://linhao-city.github.io/StoryMind/"><strong>Watch Full Demos</strong></a> &nbsp;·&nbsp;
   <a href="#how-it-works">How It Works</a> &nbsp;·&nbsp;
   <a href="#pipelines">Pipelines</a> &nbsp;·&nbsp;
   <a href="#providers">Providers</a> &nbsp;·&nbsp;
@@ -21,6 +22,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License"></a>
+  <a href="https://github.com/LinHao-city/StoryMind/stargazers"><img src="https://img.shields.io/github/stars/LinHao-city/StoryMind?style=flat&color=yellow" alt="Stars"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/node-18%2B-green" alt="Node">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform">
@@ -31,16 +33,18 @@
 ## Demo
 
 <p align="center">
-  <a href="https://github.com/LinHao-city/StoryMind/releases/download/v1.0/last_signal_v2_final.mp4">
-    <img src="assets/demo/last_signal_preview.gif" width="100%" alt="The Last Signal — click to watch full video">
+  <a href="https://linhao-city.github.io/StoryMind/">
+    <img src="assets/demo/last_signal_preview.gif" width="100%" alt="Watch full demos on the StoryMind site">
   </a>
 </p>
 
-> **▶ ["THE LAST SIGNAL"](https://github.com/LinHao-city/StoryMind/releases/download/v1.0/last_signal_v2_final.mp4)** — 30-second cinematic sci-fi short, fully produced by StoryMind.  
-> A lone astrophysicist in 2157 decodes an alien signal — a three-million-year-old farewell from a dead civilization.  
-> **Shot plan:** Claude LLM (6 shots: WS→ECU→MCU→LS→CU→EWS, character anchors injected)  
-> **Video:** Doubao Seedance 2.0 · **Voice:** Piper TTS · **Music:** Pixabay "Space Ambient" · **Compose:** FFmpeg  
-> *Click the preview to download and watch the full video.*
+<p align="center">
+  <strong><a href="https://linhao-city.github.io/StoryMind/">▶ linhao-city.github.io/StoryMind — watch both films in full, start to finish</a></strong>
+</p>
+
+**["THE LAST SIGNAL"](https://linhao-city.github.io/StoryMind/)** — 30s cinematic sci-fi short. A lone astrophysicist in 2157 decodes an alien signal — a three-million-year-old farewell from a dead civilization. 6 shots, Doubao Seedance 2.0, Piper TTS narration.
+
+**["THE NOODLE STALL" 面摊有只猫](https://linhao-city.github.io/StoryMind/)** — 2-minute Ghibli-style animated fable. A three-legged stray cat finds belonging at a rain-soaked noodle stall — proof that character consistency holds up across a full 24-shot narrative, not just a handful of clips.
 
 ---
 
