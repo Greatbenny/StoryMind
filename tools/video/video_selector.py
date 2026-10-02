@@ -7,6 +7,7 @@ the tool file in tools/video/; no changes to this selector are needed.
 
 from __future__ import annotations
 
+import json
 import os
 
 from tools.base_tool import BaseTool, ToolResult, ToolRuntime, ToolStability, ToolStatus, ToolTier
@@ -14,7 +15,7 @@ from tools.base_tool import BaseTool, ToolResult, ToolRuntime, ToolStability, To
 
 class VideoSelector(BaseTool):
     name = "video_selector"
-    version = "0.3.0"
+    version = "0.4.0"
     tier = ToolTier.GENERATE
     capability = "video_generation"
     provider = "selector"
@@ -28,6 +29,8 @@ class VideoSelector(BaseTool):
     ]
     supports = {
         "user_preference_routing": True,
+        "approved_provider_pools": True,
+        "approved_pool_retry": True,
         "offline_fallback": True,
         "reference_image": True,
         "stock_fallback": True,
@@ -48,7 +51,21 @@ class VideoSelector(BaseTool):
                 "description": "Provider name or 'auto'. Valid values are discovered at runtime from the registry.",
                 "default": "auto",
             },
-            "allowed_providers": {"type": "array", "items": {"type": "string"}},
+            "allowed_providers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "User-approved provider pool. One entry means fixed routing; multiple entries allow StoryMind to choose/retry only inside this pool.",
+            },
+            "routing_mode": {
+                "type": "string",
+                "enum": ["legacy_auto", "fixed", "approved_pool"],
+                "description": "Optional routing mode. If omitted, one allowed provider implies fixed; multiple imply approved_pool; none preserves legacy auto selection.",
+            },
+            "retry_approved_pool": {
+                "type": "boolean",
+                "default": True,
+                "description": "Retry another user-approved provider after execution failure when multiple providers are selected.",
+            },
             "operation": {
                 "type": "string",
                 "enum": ["text_to_video", "image_to_video", "reference_to_video", "rank"],
@@ -159,6 +176,7 @@ class VideoSelector(BaseTool):
         return ToolStatus.UNAVAILABLE
 
     def estimate_cost(self, inputs: dict[str, object]) -> float:
+        inputs = self._with_runtime_preferences(inputs)
         candidates = self._filter_candidates(inputs, self._providers())
         if not candidates:
             return 0.0
@@ -166,6 +184,7 @@ class VideoSelector(BaseTool):
         return tool.estimate_cost(inputs) if tool else 0.0
 
     def estimate_runtime(self, inputs: dict[str, object]) -> float:
+        inputs = self._with_runtime_preferences(inputs)
         candidates = self._providers()
         if not candidates:
             return 0.0
@@ -175,12 +194,14 @@ class VideoSelector(BaseTool):
     def execute(self, inputs: dict[str, object]) -> ToolResult:
         from lib.scoring import rank_providers
 
+        inputs = self._with_runtime_preferences(inputs)
         candidates = self._providers()
 
         # Rank mode — return scored provider rankings without generating
         if inputs.get("operation") == "rank":
             rank_inputs = self._rank_inputs(inputs)
             task_context = self._prepare_task_context(rank_inputs)
+            candidates = self._apply_provider_pool(rank_inputs, candidates)
             candidates = self._filter_candidates(rank_inputs, candidates)
             rankings = rank_providers(candidates, task_context)
             return ToolResult(
@@ -192,43 +213,151 @@ class VideoSelector(BaseTool):
                 },
             )
 
-        # Normal generation — use scored selection
+        # Normal generation — user-approved pools are hard boundaries.
         task_context = self._prepare_task_context(inputs)
-        tool, score = self._select_best_tool(inputs, candidates, task_context)
-        if tool is None:
+        candidates = self._apply_provider_pool(inputs, candidates)
+        ranked = self._ranked_selectable_tools(inputs, candidates, task_context)
+        if not ranked:
+            if inputs.get("allowed_providers"):
+                return ToolResult(success=False, error="No approved video provider is currently available for this operation.")
             return ToolResult(success=False, error="No video generation provider available.")
 
-        # Adapt input keys: stock tools use 'query' while generators use 'prompt'
-        adapted = dict(inputs)
-        if hasattr(tool, 'input_schema'):
-            required = tool.input_schema.get("properties", {})
-            if "query" in required and "query" not in adapted:
+        mode = self._routing_mode(inputs)
+        retry_allowed = mode == "approved_pool" and bool(inputs.get("retry_approved_pool", True))
+        attempts = []
+
+        for index, (tool, score) in enumerate(ranked):
+            if index > 0 and not retry_allowed:
+                break
+
+            adapted = dict(inputs)
+            props = getattr(tool, "input_schema", {}).get("properties", {})
+            if "query" in props and "query" not in adapted:
                 adapted["query"] = adapted.get("prompt", "")
 
-        # Auto-resolve reference_image_path to a URL for providers that need it
-        if adapted.get("operation") == "image_to_video" and adapted.get("reference_image_path"):
-            tool_props = getattr(tool, "input_schema", {}).get("properties", {})
-            # If the provider uses image_url (not reference_image_path), upload and convert
-            if "image_url" in tool_props and "image_url" not in adapted:
-                try:
-                    from tools.video._shared import upload_image_fal
-                    adapted["image_url"] = upload_image_fal(adapted["reference_image_path"])
-                except Exception as e:
-                    return ToolResult(success=False, error=f"Failed to upload reference image: {e}")
+            if adapted.get("operation") == "image_to_video" and adapted.get("reference_image_path"):
+                if "image_url" in props and "image_url" not in adapted:
+                    try:
+                        from tools.video._shared import upload_image_fal
+                        adapted["image_url"] = upload_image_fal(adapted["reference_image_path"])
+                    except Exception as e:
+                        attempts.append({"provider": tool.provider, "tool": tool.name, "success": False, "error": str(e)})
+                        if retry_allowed:
+                            continue
+                        return ToolResult(success=False, error=f"Failed to upload reference image: {e}")
 
-        result = tool.execute(adapted)
-        if result.success:
-            result.data.setdefault("selected_tool", tool.name)
-            result.data["selected_provider"] = tool.provider
-            result.data["selection_reason"] = score.explain() if score else f"Selected {tool.provider} ({tool.name})"
-            if score:
-                result.data["provider_score"] = score.to_dict()
-            result.data.update(self._tool_context_payload(tool))
-            result.data["alternatives_considered"] = [
-                t.name for t in candidates
-                if t.name != tool.name and t.get_status().value == "available"
-            ]
-        return result
+            result = tool.execute(adapted)
+            if result.success:
+                result.data.setdefault("selected_tool", tool.name)
+                result.data["selected_provider"] = tool.provider
+                result.data["selection_reason"] = score.explain() if score else f"Selected {tool.provider} ({tool.name})"
+                result.data["routing_mode"] = mode
+                result.data["approved_providers"] = list(inputs.get("allowed_providers") or [])
+                result.data["attempts"] = attempts + [{"provider": tool.provider, "tool": tool.name, "success": True}]
+                if score:
+                    result.data["provider_score"] = score.to_dict()
+                result.data.update(self._tool_context_payload(tool))
+                result.data["alternatives_considered"] = [t.name for t, _ in ranked if t.name != tool.name]
+                return result
+
+            attempts.append({"provider": tool.provider, "tool": tool.name, "success": False, "error": result.error})
+            if not retry_allowed:
+                return result
+
+        last_error = attempts[-1]["error"] if attempts else "No approved provider completed successfully."
+        return ToolResult(success=False, error=str(last_error), data={
+            "routing_mode": mode,
+            "approved_providers": list(inputs.get("allowed_providers") or []),
+            "attempts": attempts,
+        })
+
+    def _with_runtime_preferences(self, inputs: dict[str, object]) -> dict[str, object]:
+        """Apply per-user StoryMind routing preferences injected by Codex-web.
+
+        Explicit tool-call routing fields always win. Runtime preferences only fill
+        fields the caller did not provide.
+        """
+        if (
+            inputs.get("allowed_providers")
+            or inputs.get("routing_mode")
+            or inputs.get("preferred_provider") not in (None, "", "auto")
+        ):
+            return inputs
+        raw = os.environ.get("STORYMIND_ROUTING_PREFERENCES_JSON", "").strip()
+        if not raw:
+            return inputs
+        try:
+            payload = json.loads(raw)
+            video = payload.get("capabilities", {}).get("video_generation", {})
+            selected = video.get("selectedProviders") or []
+            if (
+                not isinstance(selected, list)
+                or not selected
+                or not all(isinstance(item, str) for item in selected)
+            ):
+                return inputs
+            merged = dict(inputs)
+            merged["allowed_providers"] = selected
+            merged["routing_mode"] = "fixed" if len(selected) == 1 else "approved_pool"
+            preferred = video.get("preferredProvider")
+            if isinstance(preferred, str) and preferred in selected:
+                merged["preferred_provider"] = preferred
+            return merged
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return inputs
+
+    def _routing_mode(self, inputs: dict[str, object]) -> str:
+        explicit = str(inputs.get("routing_mode") or "").strip()
+        if explicit in {"legacy_auto", "fixed", "approved_pool"}:
+            return explicit
+        allowed = list(inputs.get("allowed_providers") or [])
+        if len(allowed) == 1:
+            return "fixed"
+        if len(allowed) > 1:
+            return "approved_pool"
+        return "legacy_auto"
+
+    def _apply_provider_pool(self, inputs: dict[str, object], candidates: list[BaseTool]) -> list[BaseTool]:
+        allowed = [str(p).strip() for p in (inputs.get("allowed_providers") or []) if str(p).strip()]
+        if not allowed:
+            return candidates
+        approved = set(allowed)
+        return [tool for tool in candidates if tool.provider in approved or tool.name in approved]
+
+    def _ranked_selectable_tools(
+        self,
+        inputs: dict[str, object],
+        candidates: list[BaseTool],
+        task_context: dict[str, object],
+    ) -> list[tuple[BaseTool, object]]:
+        from lib.scoring import rank_providers
+
+        candidates = self._apply_provider_pool(inputs, candidates)
+        candidates = self._filter_candidates(inputs, candidates)
+        rankings = rank_providers(candidates, task_context)
+        by_name = {tool.name: tool for tool in candidates if self._tool_selectable(tool, inputs)}
+
+        preferred = str(inputs.get("preferred_provider", "auto"))
+        if self._routing_mode(inputs) == "fixed" and inputs.get("allowed_providers"):
+            preferred = str(list(inputs.get("allowed_providers") or [])[0])
+
+        ranked = []
+        seen = set()
+        if preferred != "auto":
+            for score in rankings:
+                tool = by_name.get(score.tool_name)
+                if tool and (tool.provider == preferred or tool.name == preferred):
+                    ranked.append((tool, score))
+                    seen.add(tool.name)
+                    break
+
+        for score in rankings:
+            tool = by_name.get(score.tool_name)
+            if tool and tool.name not in seen:
+                ranked.append((tool, score))
+                seen.add(tool.name)
+
+        return ranked
 
     def _select_best_tool(
         self,
@@ -398,4 +527,5 @@ class VideoSelector(BaseTool):
         caller-supplied custom workflow even while bundled models report DEGRADED."""
         if tool.get_status() == ToolStatus.AVAILABLE:
             return True
+
         return self._custom_workflow_eligible(tool, inputs)
